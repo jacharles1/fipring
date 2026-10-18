@@ -42,11 +42,20 @@ def save_key(path: Path, key: bytes):
 
 
 async def cmd_scan(args):
-    rings = await BleTransport.scan(args.timeout)
-    if not rings:
-        print("No rings found. Bring it close, take it off the charger, and make sure no phone is connected.")
-    for dev, adv in rings:
-        print(f"{adv.rssi:>5} dBm  {dev.address}  {dev.name or adv.local_name or '(unnamed)'}")
+    print(f"Scanning {args.timeout:.0f}s{' for ALL Bluetooth devices' if args.all else ''}...")
+    found = await BleTransport.scan(args.timeout, all_devices=args.all)
+    if not found:
+        print("Nothing found. Wear the ring and move your hand (it sleeps when still), and turn the phone's "
+              "Bluetooth off in Settings, not Control Center. Try --timeout 60 or `scan --all`.")
+    for dev, adv in found:
+        name = dev.name or adv.local_name or "(unnamed)"
+        services = [u.lower() for u in adv.service_uuids]
+        mark = "  <-- Oura service" if proto.OURA_SERVICE in services else ("  <-- name looks like Oura" if "oura" in name.lower() else "")
+        line = f"{adv.rssi:>5} dBm  {dev.address}  {name}{mark}"
+        if args.all:
+            mfr = ",".join(f"0x{k:04x}" for k in adv.manufacturer_data)
+            line += f"\n           services={services or '-'} manufacturer={mfr or '-'}"
+        print(line)
 
 
 async def cmd_gatt(args):
@@ -181,7 +190,7 @@ def main(argv=None):
     ap.add_argument("--timeout", type=float, default=30)
     ap.add_argument("-v", "--verbose", action="store_true", help="log every frame sent/received")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("scan")
+    sub.add_parser("scan").add_argument("--all", action="store_true", help="list every BLE device, not just Oura")
     sub.add_parser("gatt")
     sub.add_parser("pair").add_argument("--yes", action="store_true")
     sub.add_parser("info")

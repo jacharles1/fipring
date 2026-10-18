@@ -180,9 +180,10 @@ class BleTransport:
         await self.client.write_gatt_char(proto.OURA_WRITE, data, response=True)
 
     @staticmethod
-    async def scan(timeout: float = 20.0):
+    async def scan(timeout: float = 20.0, all_devices: bool = False):
         from bleak import BleakScanner
-        found = await BleakScanner.discover(timeout=timeout, return_adv=True, service_uuids=[proto.OURA_SERVICE])
+        kwargs = {} if all_devices else {"service_uuids": [proto.OURA_SERVICE]}
+        found = await BleakScanner.discover(timeout=timeout, return_adv=True, **kwargs)
         return sorted(found.values(), key=lambda da: -da[1].rssi)
 
     @classmethod
