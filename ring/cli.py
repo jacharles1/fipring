@@ -193,10 +193,16 @@ def main(argv=None):
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO, format="%(asctime)s %(message)s")
     if args.cmd == "redecode":
         return cmd_redecode(args)
+    from bleak.exc import BleakError
     try:
         asyncio.run(globals()[f"cmd_{args.cmd}"](args))
-    except ProtocolError as e:
-        sys.exit(f"error: {e}")
+    except (ProtocolError, BleakError) as e:
+        hint = ""
+        if "turned off" in str(e):
+            hint = " - turn on Bluetooth on this computer (not the phone)"
+        elif "not authorized" in str(e).lower() or "unauthorized" in str(e).lower():
+            hint = " - allow your terminal app under System Settings > Privacy & Security > Bluetooth"
+        sys.exit(f"error: {e}{hint}")
 
 
 if __name__ == "__main__":
