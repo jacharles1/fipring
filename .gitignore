@@ -1,0 +1,10 @@
+.env
+__pycache__/
+*.pyc
+.venv/
+data/
+captures/
+*.log
+*.btsnoop
+*.pklg
+*.db

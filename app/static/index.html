@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>fipring</title>
+<link rel="stylesheet" href="style.css">
+<script src="vendor/chart.umd.js"></script>
+<script src="vendor/chartjs-adapter-date-fns.bundle.min.js"></script>
+</head>
+<body>
+<header>
+  <h1>fipring</h1>
+  <div class="controls">
+    <div class="range" role="group" aria-label="Date range">
+      <button data-days="7">7d</button>
+      <button data-days="30">30d</button>
+      <button data-days="90" aria-pressed="true">90d</button>
+      <button data-days="365">1y</button>
+    </div>
+    <button id="sync">Sync now</button>
+    <a id="connect" href="/auth/login" hidden>Connect Oura</a>
+  </div>
+  <p id="status" class="muted"></p>
+</header>
+
+<main>
+  <section class="tiles" id="tiles"></section>
+
+  <section class="card">
+    <h2>Scores</h2>
+    <div class="legend" id="legend-scores"></div>
+    <div class="chart"><canvas id="scores"></canvas></div>
+  </section>
+
+  <section class="card">
+    <h2>Sleep stages (hours)</h2>
+    <div class="legend" id="legend-stages"></div>
+    <div class="chart"><canvas id="stages"></canvas></div>
+  </section>
+
+  <div class="grid2">
+    <section class="card">
+      <h2>Overnight HRV (ms)</h2>
+      <div class="chart small"><canvas id="hrv"></canvas></div>
+    </section>
+    <section class="card">
+      <h2>Lowest overnight heart rate (bpm)</h2>
+      <div class="chart small"><canvas id="rhr"></canvas></div>
+    </section>
+  </div>
+
+  <section class="card">
+    <h2>Steps</h2>
+    <div class="chart small"><canvas id="steps"></canvas></div>
+  </section>
+
+  <section class="card">
+    <h2>Heart rate on <input type="date" id="hr-day"></h2>
+    <div class="chart"><canvas id="hr"></canvas></div>
+  </section>
+
+  <section class="card">
+    <details>
+      <summary>Table view</summary>
+      <div class="table-wrap"><table id="table"></table></div>
+    </details>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>
