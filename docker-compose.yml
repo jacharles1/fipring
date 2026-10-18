@@ -8,8 +8,8 @@ services:
       POSTGRES_DB: oura
     volumes:
       - pgdata:/var/lib/postgresql/data
-    # Exposed so the ble/ tools on your laptop can write captures into the same DB.
-    # Remove if you don't need that.
+    # Published so a collector on your laptop (or the host-networked collector below)
+    # can write into the same database. Keep it on your LAN.
     ports:
       - "5432:5432"
     healthcheck:
@@ -20,12 +20,35 @@ services:
   app:
     build: .
     restart: unless-stopped
-    env_file: .env
+    environment:
+      DATABASE_URL: postgresql+psycopg://oura:${POSTGRES_PASSWORD}@db:5432/oura
+      TZ: ${TZ:-UTC}
     depends_on:
       db:
         condition: service_healthy
     ports:
       - "8000:8000"
+
+  # Optional: syncs the ring from the homelab itself. Needs a Bluetooth adapter on the
+  # host (a USB dongle is fine) with BlueZ running. Start with:
+  #   docker compose --profile collector up -d
+  collector:
+    profiles: ["collector"]
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "ring.cli", "sync", "--every", "${SYNC_EVERY_MINUTES:-30}"]
+    network_mode: host  # BLE goes through the host's BlueZ over D-Bus
+    environment:
+      DATABASE_URL: postgresql+psycopg://oura:${POSTGRES_PASSWORD}@127.0.0.1:5432/oura
+      OURA_KEY_FILE: /keys/ring.key
+      OURA_RING_ADDRESS: ${OURA_RING_ADDRESS:-}
+      TZ: ${TZ:-UTC}
+    volumes:
+      - /var/run/dbus:/var/run/dbus
+      - ${OURA_KEY_DIR:-~/.fipring}:/keys:ro
+    depends_on:
+      db:
+        condition: service_healthy
 
 volumes:
   pgdata:

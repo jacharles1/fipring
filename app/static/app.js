@@ -1,10 +1,11 @@
 const charts = {};
-let days = 90;
+let days = 30;
 let daily = [];
 
 const css = (name) => getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+const esc = (s) => String(s ?? "").replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
 
-function baseOptions(extra = {}) {
+function baseOptions() {
   return {
     responsive: true,
     maintainAspectRatio: false,
@@ -21,11 +22,10 @@ function baseOptions(extra = {}) {
            ticks: { color: css("--muted"), maxTicksLimit: 8, maxRotation: 0 } },
       y: { grid: { color: css("--grid") }, border: { display: false }, ticks: { color: css("--muted") } },
     },
-    ...extra,
   };
 }
 
-function line(label, key, color) {
+function line(label, key, color = "--series-1") {
   return {
     label, borderColor: css(color), backgroundColor: css(color), borderWidth: 2,
     pointRadius: 0, pointHoverRadius: 4, spanGaps: true, tension: 0.25,
@@ -33,7 +33,7 @@ function line(label, key, color) {
   };
 }
 
-function bar(label, key, color) {
+function bar(label, key, color = "--series-1") {
   return {
     // the 1px surface gap only reads when bars are wide enough; on dense ranges it swallows them
     label, backgroundColor: css(color), borderColor: css("--surface-1"),
@@ -43,108 +43,96 @@ function bar(label, key, color) {
   };
 }
 
-function draw(id, config) {
+function draw(id, type, datasets, opts = baseOptions()) {
   charts[id]?.destroy();
-  charts[id] = new Chart(document.getElementById(id), config);
+  charts[id] = new Chart(document.getElementById(id), { type, data: { datasets }, options: opts });
 }
 
-function legend(id, items) {
-  document.getElementById(id).innerHTML = items
-    .map(([label, color]) => `<span style="--c: var(${color})">${label}</span>`).join("");
-}
-
-function renderTiles() {
+function renderTiles(status) {
   const last = (key) => [...daily].reverse().find((d) => d[key] != null)?.[key];
+  const dev = status.devices[0];
+  const synced = dev?.last_sync_at ? new Date(dev.last_sync_at).toLocaleString([], { dateStyle: "short", timeStyle: "short" }) : null;
   const tiles = [
-    ["Readiness", last("readiness"), ""],
-    ["Sleep score", last("sleep_score"), ""],
-    ["Activity score", last("activity_score"), ""],
-    ["HRV", last("avg_hrv"), "ms"],
+    ["Sleep", last("sleep_h"), "h"],
+    ["HRV (RMSSD)", last("avg_rmssd"), "ms"],
     ["Lowest HR", last("lowest_hr"), "bpm"],
-    ["Steps", last("steps")?.toLocaleString(), ""],
+    ["Skin temp", last("skin_temp_c"), "°C"],
+    ["Battery", dev?.battery, "%"],
+    ["Last sync", synced, ""],
   ];
   document.getElementById("tiles").innerHTML = tiles.map(([label, v, unit]) =>
     `<div class="tile"><div class="label">${label}</div>
-     <div class="value">${v ?? "–"}<span class="unit">${v != null ? unit : ""}</span></div></div>`).join("");
+     <div class="value${label === "Last sync" ? " small" : ""}">${esc(v ?? "–")}<span class="unit">${v != null ? unit : ""}</span></div></div>`).join("");
 }
 
 function renderTable() {
-  const cols = ["day", "readiness", "sleep_score", "activity_score", "steps", "deep_h", "rem_h",
-                "light_h", "awake_h", "avg_hrv", "lowest_hr", "temp_deviation"];
+  const cols = ["day", "sleep_h", "avg_rmssd", "lowest_hr", "avg_night_hr", "skin_temp_c", "avg_met"];
   document.getElementById("table").innerHTML =
     `<thead><tr>${cols.map((c) => `<th>${c}</th>`).join("")}</tr></thead><tbody>` +
-    [...daily].reverse().map((d) => `<tr>${cols.map((c) => `<td>${d[c] ?? ""}</td>`).join("")}</tr>`).join("") +
+    [...daily].reverse().map((d) => `<tr>${cols.map((c) => `<td>${esc(d[c])}</td>`).join("")}</tr>`).join("") +
     "</tbody>";
 }
 
 function renderDaily() {
-  renderTiles();
   renderTable();
-
-  const scores = [["Readiness", "readiness", "--series-1"], ["Sleep", "sleep_score", "--series-2"],
-                  ["Activity", "activity_score", "--series-3"]];
-  legend("legend-scores", scores.map(([l, , c]) => [l, c]));
-  draw("scores", { type: "line", data: { datasets: scores.map((s) => line(...s)) },
-                   options: baseOptions() });
-
-  const stages = [["Deep", "deep_h", "--series-1"], ["REM", "rem_h", "--series-2"],
-                  ["Light", "light_h", "--series-3"], ["Awake", "awake_h", "--series-4"]];
-  legend("legend-stages", stages.map(([l, , c]) => [l, c]));
-  const stacked = baseOptions();
-  stacked.scales.x.stacked = true;
-  stacked.scales.y.stacked = true;
-  draw("stages", { type: "bar", data: { datasets: stages.map((s) => bar(...s)) }, options: stacked });
-
-  draw("hrv", { type: "line", data: { datasets: [line("HRV", "avg_hrv", "--series-1")] }, options: baseOptions() });
-  draw("rhr", { type: "line", data: { datasets: [line("Lowest HR", "lowest_hr", "--series-1")] }, options: baseOptions() });
-  draw("steps", { type: "bar", data: { datasets: [bar("Steps", "steps", "--series-1")] }, options: baseOptions() });
+  draw("sleep", "bar", [bar("Sleep", "sleep_h")]);
+  draw("hrv", "line", [line("RMSSD", "avg_rmssd")]);
+  draw("rhr", "line", [line("Lowest HR", "lowest_hr")]);
+  draw("temp", "line", [line("Skin temp", "skin_temp_c")]);
+  draw("met", "bar", [bar("Avg MET", "avg_met")]);
 }
 
 async function renderHeartRate() {
   const day = document.getElementById("hr-day").value;
   if (!day) return;
-  const samples = await (await fetch(`/api/heartrate?day=${day}`)).json();
+  const pts = await (await fetch(`/api/heartrate?day=${day}`)).json();
   const opts = baseOptions();
   opts.scales.x.time.unit = "hour";
   opts.scales.x.time.tooltipFormat = "p";
-  draw("hr", { type: "line", data: { datasets: [{
-    label: "BPM", borderColor: css("--series-1"), borderWidth: 2, pointRadius: 0, pointHoverRadius: 4,
-    data: samples.map((s) => ({ x: s.t, y: s.bpm })),
-  }] }, options: opts });
+  const series = [["Overnight (hrv_event)", "hrv_event", "--series-1"], ["Daytime (green IBI)", "green_ibi", "--series-2"]];
+  document.getElementById("legend-hr").innerHTML = series
+    .map(([label, , color]) => `<span style="--c: var(${color})">${label}</span>`).join("");
+  draw("hr", "line", series.map(([label, source, color]) => ({
+    label, borderColor: css(color), backgroundColor: css(color), borderWidth: 2,
+    pointRadius: 0, pointHoverRadius: 4, spanGaps: false,
+    data: pts.filter((p) => p.source === source).map((p) => ({ x: p.t, y: p.bpm })),
+  })), opts);
 }
 
-async function loadStatus() {
-  const s = await (await fetch("/api/status")).json();
-  document.getElementById("connect").hidden = s.connected;
-  const total = Object.values(s.documents).reduce((a, b) => a + b, 0);
-  document.getElementById("status").textContent = !s.connected
-    ? "Not connected to Oura yet."
-    : `${s.syncing ? "Syncing… " : ""}${total} documents, ${s.heartrate_samples} heart-rate samples, ${s.ble_packets} BLE packets stored.`;
-  return s;
+async function renderEventTypes() {
+  const rows = await (await fetch("/api/event-types")).json();
+  document.getElementById("types").innerHTML =
+    "<thead><tr><th>event</th><th>tag</th><th>count</th><th>decoded</th><th>last seen</th></tr></thead><tbody>" +
+    rows.map((r) => `<tr><td>${esc(r.name)}</td><td>${esc(r.tag)}</td><td>${r.count.toLocaleString()}</td>
+      <td>${r.count ? Math.round((100 * r.decoded) / r.count) : 0}%</td>
+      <td>${r.last_seen ? esc(new Date(r.last_seen).toLocaleString()) : "undated"}</td></tr>`).join("") +
+    "</tbody>";
 }
 
-async function loadDaily() {
-  daily = await (await fetch(`/api/daily?days=${days}`)).json();
+async function load() {
+  const [status, d] = await Promise.all([
+    fetch("/api/status").then((r) => r.json()),
+    fetch(`/api/daily?days=${days}`).then((r) => r.json()),
+  ]);
+  daily = d;
+  document.getElementById("status").textContent = status.devices.length
+    ? `${status.events.toLocaleString()} events stored from ring ${status.devices.map((x) => x.serial).join(", ")}` +
+      (status.undated_events ? ` (${status.undated_events.toLocaleString()} not yet dated)` : "")
+    : "No ring synced yet. Run `python -m ring.cli sync` on the collector.";
+  renderTiles(status);
   renderDaily();
   const hrDay = document.getElementById("hr-day");
   if (!hrDay.value && daily.length) hrDay.value = daily[daily.length - 1].day;
   renderHeartRate();
+  renderEventTypes();
 }
 
 document.querySelectorAll(".range button").forEach((b) => b.addEventListener("click", () => {
   document.querySelectorAll(".range button").forEach((o) => o.setAttribute("aria-pressed", o === b));
   days = Number(b.dataset.days);
-  loadDaily();
+  load();
 }));
 document.getElementById("hr-day").addEventListener("change", renderHeartRate);
-document.getElementById("sync").addEventListener("click", async () => {
-  await fetch("/api/sync", { method: "POST" });
-  const poll = setInterval(async () => {
-    const s = await loadStatus();
-    if (!s.syncing) { clearInterval(poll); loadDaily(); }
-  }, 3000);
-});
 matchMedia("(prefers-color-scheme: dark)").addEventListener("change", () => { renderDaily(); renderHeartRate(); });
 
-loadStatus();
-loadDaily();
+load();

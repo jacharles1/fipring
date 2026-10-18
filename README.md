@@ -1,86 +1,98 @@
 # fipring
 
-A personal data stack for an Oura Ring 4: pull everything the ring measures into a database
-you own, explore the ring's Bluetooth protocol, and visualize it all on a self-hosted dashboard.
+Read an Oura Ring 4 directly over Bluetooth, with no Oura app, account or membership.
+Store everything it records in your own database and view it on a dashboard you host.
 
 ```
-            ┌──────────── Oura Cloud API v2 (OAuth) ─────────────┐
- Oura Ring ─┤                                                    ├─► app/ (FastAPI) ─► Postgres ─► dashboard
-            └── Bluetooth LE ─► ble/ tools (laptop / Raspberry Pi) ┘                      ▲
-                                 explore · listen · btsnoop import ───────────────────────┘
+ Oura Ring ──BLE──► collector (laptop / Raspberry Pi / homelab + USB dongle)
+  records 24/7,        python -m ring.cli sync --every 30
+  buffers ~7 days      │  auth handshake → set clock → download history events
+                       ▼
+                    Postgres (homelab, Docker) ──► dashboard (homelab, Docker) :8000
 ```
 
-Two ways data gets in:
+- **`ring/`** is the Bluetooth client: packet framing, the AES auth handshake, history download,
+  and decoders for each event type. It's a Python port of the protocol reverse-engineered by
+  [open_oura](https://github.com/Th0rgal/open_oura) (MIT, see `THIRD_PARTY_NOTICES`).
+- **`app/`** is the dashboard and API. It shows sleep duration, overnight HRV (RMSSD), lowest
+  heart rate, skin temperature, activity (MET), heart rate across a day, and a table of every
+  event type the ring has sent, including the ones nobody has decoded yet.
 
-1. **Cloud sync (works today).** The `app` service uses Oura's official API to sync scores, sleep stages,
-   HRV, heart rate, SpO2, stress, workouts and more every hour. Every response is stored verbatim as JSON,
-   so nothing is lost even if it isn't charted yet.
-2. **Direct from the ring (the reverse-engineering part).** The `ble/` tools dump the ring's GATT table,
-   record what it sends, and import Bluetooth captures from your phone into the `ble_packets` table so
-   you can decode the protocol. See [docs/reverse-engineering.md](docs/reverse-engineering.md).
+## How it works
 
-## Quick start on a homelab
+The ring measures and stores data on its own, whether or not anything is connected.
+Oura says a Ring 4 holds about a week of data. When a collector comes within Bluetooth
+range, it connects, authenticates, sets the ring's clock, and downloads everything recorded
+since the last sync. You don't need the laptop with you during the day. Leave the collector
+somewhere the ring is every day, like your bedside or desk, and it catches up.
 
-Requires Docker + Docker Compose on the homelab box.
+Your ring is protected by a 16-byte key. The Oura app creates that key when it pairs, and an
+iPhone gives you no way to extract it. So you **factory-reset the ring and install your own
+key**. After that the ring talks only to this project, not to the Oura app, until you reset it
+again. See [docs/ring-setup.md](docs/ring-setup.md).
 
-1. **Create an Oura API application** at <https://developer.ouraring.com> (you need an active Oura Membership).
-   Set its redirect URI to the address you'll open the dashboard on, e.g.
-   `http://192.168.1.50:8000/auth/callback`. If Oura insists on HTTPS, put the app behind your reverse
-   proxy (Caddy/Traefik/Nginx Proxy Manager) or use `http://localhost:8000/auth/callback` with an SSH tunnel
-   (`ssh -L 8000:localhost:8000 homelab`) for the one-time login.
-2. `cp .env.example .env` and fill in `OURA_CLIENT_ID`, `OURA_CLIENT_SECRET`, `OURA_REDIRECT_URI`,
-   and a real `POSTGRES_PASSWORD` (use the same password inside `DATABASE_URL`).
-3. `docker compose up -d --build`
-4. Open `http://<homelab>:8000`, click **Connect Oura**, approve. The first sync backfills
-   `BACKFILL_DAYS` (default 365) and then re-syncs every `SYNC_INTERVAL_MINUTES`.
+## Quick start
 
-The dashboard has no login of its own. Keep it on your LAN or behind Tailscale or your reverse proxy's auth.
-Don't port-forward it to the internet.
+**Homelab (database + dashboard):**
 
-## Run locally without Docker
+```bash
+cp .env.example .env          # set POSTGRES_PASSWORD and TZ
+docker compose up -d --build  # dashboard on http://<homelab>:8000
+```
+
+**Collector (laptop, Raspberry Pi, or the homelab itself):**
 
 ```bash
 python -m venv .venv && . .venv/bin/activate
-pip install -r requirements-dev.txt
-python -m app.demo                 # optional: 90 days of fake data so the dashboard has something to show
-uvicorn app.main:app --reload      # http://localhost:8000  (uses SQLite in ./data by default)
-pytest
+pip install -r requirements.txt
+python -m ring.cli scan                       # is the ring visible?
+python -m ring.cli pair --yes                 # once, on a factory-reset ring
+export DATABASE_URL=postgresql+psycopg://oura:<password>@<homelab>:5432/oura
+python -m ring.cli sync --every 30            # sync every 30 min while in range
 ```
+
+If the homelab has Bluetooth (a $10–15 USB dongle works), run the collector there instead
+with `docker compose --profile collector up -d`. Copy `~/.fipring/ring.key` from the machine
+you paired on.
+
+**Just want to see the dashboard?** Run `python -m app.demo && uvicorn app.main:app` to load
+60 days of synthetic events, encoded byte-for-byte the way the ring sends them.
+
+## Commands
+
+| | |
+|---|---|
+| `ring.cli scan` | list nearby rings |
+| `ring.cli gatt` | dump the ring's Bluetooth services and characteristics |
+| `ring.cli pair --yes` | install your own key on a factory-reset ring, set clock, turn on HR + SpO2 |
+| `ring.cli info` | firmware, serial, battery |
+| `ring.cli sync [--every N]` | download history into the database |
+| `ring.cli sniff --seconds 60` | authenticate, then print every raw frame (for reverse-engineering) |
+| `ring.cli redecode` | re-run decoders over stored raw events after you improve one |
+
+Add `-v` to log every frame sent and received.
 
 ## Database
 
-| table | what's in it |
-|---|---|
-| `oura_documents` | every document from every API collection, keyed by (collection, id), raw JSON in `data` |
-| `heartrate` | 5-minute heart-rate samples (timestamp, source, bpm) |
-| `ble_packets` | raw BLE traffic from the `ble/` tools: direction, characteristic/handle, hex payload |
-| `sync_state`, `oauth_token` | bookkeeping |
+`ring_events` has one row per history event: `tag`, `name`, `ring_ts` (the ring's own
+decisecond counter), `ts` (wall-clock time, derived from `time_sync` anchors), `body_hex` (raw
+bytes, never thrown away), and `decoded` (JSON, when the layout is known). `devices` holds the
+sync cursor, firmware and battery.
 
-Postgres lets you query JSON directly, e.g.
-`select day, data->>'average_hrv' from oura_documents where collection = 'sleep' order by day;`
+```sql
+select name, count(*), count(decoded) from ring_events group by name order by 2 desc;
+```
 
 ## API
 
-| endpoint | |
-|---|---|
-| `GET /api/status` | connection state, row counts |
-| `POST /api/sync` | sync now |
-| `GET /api/daily?days=90` | one row per day: scores, sleep stages, HRV, lowest HR, steps |
-| `GET /api/heartrate?day=YYYY-MM-DD` | heart-rate samples for a day |
-| `GET /api/documents/{collection}` | raw JSON (e.g. `sleep`, `daily_readiness`, `workout`) |
-| `GET /api/ble?session=...` | captured BLE packets |
+`/api/status`, `/api/daily?days=30`, `/api/heartrate?day=YYYY-MM-DD`, `/api/event-types`,
+`/api/events?name=debug_data&limit=50`
 
-## Bluetooth tools
-
-These run on a machine with Bluetooth near the ring (laptop or Raspberry Pi), not in Docker:
+## Tests
 
 ```bash
-pip install -r ble/requirements.txt
-python -m ble.explore                         # find the ring, dump services/characteristics
-python -m ble.listen --mac <ring MAC>         # subscribe to notifications and record them
-python -m ble.btsnoop btsnoop_hci.log         # import a phone capture of the official app syncing
+pip install -r requirements-dev.txt && pytest
 ```
 
-Set `DATABASE_URL=postgresql+psycopg://oura:<pw>@<homelab>:5432/oura` to send captures straight to the
-homelab database. Captures always go to `captures/*.jsonl` too, and that folder is git-ignored.
-Keep your ring's MAC and serial number out of git: put them in `.env`.
+The tests cover the protocol (open_oura's known-answer vectors), the decoders, and a full sync
+against a simulated ring: auth, batched download, duplicate handling, and timestamping.

@@ -1,46 +1,59 @@
-"""Fill the database with ~90 days of synthetic data so the dashboard can be tried
-before connecting a real ring:  python -m app.demo"""
+"""Fill the database with synthetic ring events (encoded exactly as the ring sends
+them) so the dashboard can be tried before pairing a ring:  python -m app.demo"""
 import math
 import random
-from datetime import date, datetime, timedelta, timezone
+import time
+from datetime import datetime, timedelta
 
-from app.db import HeartRate, OuraDocument, SessionLocal, init_db
+from app.db import SessionLocal, init_db
+from ring import store
+from ring.events import RingEvent
+
+SERIAL = "DEMO0000"
 
 
-def main(days: int = 90):
+def main(days: int = 60):
     init_db()
-    rng = random.Random(42)
-    today = date.today()
+    rng = random.Random(7)
+    now = int(time.time())
+    base = now - days * 86400
+    ds = lambda unix: (unix - base) * 10 + 5_000  # ring counter started a little before `base`
+    events = []
+
+    today = datetime.now().astimezone().replace(hour=0, minute=0, second=0, microsecond=0)
+    for i in range(days):
+        day = today - timedelta(days=days - i)
+        wave = math.sin(i / 6)
+        noon = int((day + timedelta(hours=12)).timestamp())
+        events.append(RingEvent(0x42, ds(noon), noon.to_bytes(4, "little")))  # daily time_sync anchor
+
+        bed = int((day + timedelta(hours=23, minutes=rng.randint(-40, 50))).timestamp())
+        wake = bed + int(rng.uniform(6.2, 8.4) * 3600)
+        events.append(RingEvent(0x76, ds(wake), ds(bed).to_bytes(4, "little") + ds(wake).to_bytes(4, "little")))
+        rmssd0, hr0 = 55 + 10 * wave, 50 - 3 * wave
+        for t in range(bed, wake, 3600):  # one hrv_event per hour holding 12 five-minute pairs
+            body = bytearray()
+            for k in range(12):
+                frac = (t - bed + k * 300) / (wake - bed)
+                body += bytes([round(hr0 + 6 * (frac - 0.4) ** 2 * 4 + rng.gauss(0, 1.5)),
+                               max(5, round(rmssd0 + rng.gauss(0, 8)))])
+            events.append(RingEvent(0x5D, ds(t), bytes(body)))
+            temp = round((35.2 + 0.25 * wave + rng.gauss(0, 0.1)) * 100)
+            events.append(RingEvent(0x75, ds(t), temp.to_bytes(2, "little", signed=True)))
+        for t in range(wake + 1800, bed + 86400 - 3600, 1800):  # daytime HR and activity
+            ibi = round(60000 / (68 + 12 * math.sin((t - wake) / 20000) + rng.gauss(0, 4)))
+            events.append(RingEvent(0x80, ds(t), bytes([ibi >> 3, (ibi & 7) | 0b00001000]) * 4))
+            mets = [min(127, max(9, round(rng.gauss(16, 6)))) for _ in range(30)]
+            events.append(RingEvent(0x50, ds(t), bytes([1] + mets)))
+        events.append(RingEvent(0x43, ds(noon + 60), b"demo debug line"))
+        events.append(RingEvent(0x61, ds(noon + 120), bytes(rng.randrange(256) for _ in range(12))))
+
+    events = [e for e in events if e.timestamp <= ds(now)]
     with SessionLocal() as db:
-        for i in range(days):
-            day = today - timedelta(days=days - i)
-            wave = math.sin(i / 7)
-            docs = {
-                "daily_readiness": {"score": round(78 + 8 * wave + rng.gauss(0, 4)),
-                                    "temperature_deviation": round(rng.gauss(0, 0.2), 2)},
-                "daily_sleep": {"score": round(80 + 6 * wave + rng.gauss(0, 5))},
-                "daily_activity": {"score": round(75 + rng.gauss(0, 8)), "steps": round(8000 + rng.gauss(0, 2500)),
-                                   "active_calories": round(400 + rng.gauss(0, 120))},
-                "sleep": {"type": "long_sleep", "total_sleep_duration": 0,
-                          "deep_sleep_duration": round(rng.uniform(1.0, 1.8) * 3600),
-                          "rem_sleep_duration": round(rng.uniform(1.3, 2.1) * 3600),
-                          "light_sleep_duration": round(rng.uniform(3.2, 4.2) * 3600),
-                          "awake_time": round(rng.uniform(0.3, 0.9) * 3600),
-                          "average_hrv": round(55 + 10 * wave + rng.gauss(0, 5)),
-                          "lowest_heart_rate": round(50 - 3 * wave + rng.gauss(0, 2))},
-            }
-            for collection, data in docs.items():
-                doc_id = f"demo-{collection}-{day}"
-                db.merge(OuraDocument(collection=collection, id=doc_id, day=day,
-                                      data={"id": doc_id, "day": day.isoformat(), **data}))
-            start = datetime(day.year, day.month, day.day, tzinfo=timezone.utc)
-            for m in range(0, 24 * 60, 5):
-                hour = m / 60
-                bpm = 52 + 25 * max(0, math.sin((hour - 7) / 16 * math.pi)) + rng.gauss(0, 4)
-                db.merge(HeartRate(timestamp=start + timedelta(minutes=m),
-                                   source="rest" if hour < 7 else "awake", bpm=round(bpm)))
-        db.commit()
-    print(f"inserted {days} days of demo data")
+        store.commit_batch(db, SERIAL, events, max(e.timestamp for e in events) + 1)
+        store.assign_timestamps(db, SERIAL)
+        store.mark_synced(db, SERIAL, firmware="2.12.3", battery=77)
+    print(f"inserted {len(events)} synthetic ring events over {days} days")
 
 
 if __name__ == "__main__":

@@ -1,3 +1,0 @@
-bleak==0.22.3
-sqlalchemy==2.0.36
-psycopg[binary]==3.2.3

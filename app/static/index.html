@@ -14,12 +14,10 @@
   <div class="controls">
     <div class="range" role="group" aria-label="Date range">
       <button data-days="7">7d</button>
-      <button data-days="30">30d</button>
-      <button data-days="90" aria-pressed="true">90d</button>
+      <button data-days="30" aria-pressed="true">30d</button>
+      <button data-days="90">90d</button>
       <button data-days="365">1y</button>
     </div>
-    <button id="sync">Sync now</button>
-    <a id="connect" href="/auth/login" hidden>Connect Oura</a>
   </div>
   <p id="status" class="muted"></p>
 </header>
@@ -28,20 +26,13 @@
   <section class="tiles" id="tiles"></section>
 
   <section class="card">
-    <h2>Scores</h2>
-    <div class="legend" id="legend-scores"></div>
-    <div class="chart"><canvas id="scores"></canvas></div>
-  </section>
-
-  <section class="card">
-    <h2>Sleep stages (hours)</h2>
-    <div class="legend" id="legend-stages"></div>
-    <div class="chart"><canvas id="stages"></canvas></div>
+    <h2>Sleep (hours, ring's own bedtime detection)</h2>
+    <div class="chart small"><canvas id="sleep"></canvas></div>
   </section>
 
   <div class="grid2">
     <section class="card">
-      <h2>Overnight HRV (ms)</h2>
+      <h2>Overnight HRV, RMSSD (ms)</h2>
       <div class="chart small"><canvas id="hrv"></canvas></div>
     </section>
     <section class="card">
@@ -50,19 +41,32 @@
     </section>
   </div>
 
-  <section class="card">
-    <h2>Steps</h2>
-    <div class="chart small"><canvas id="steps"></canvas></div>
-  </section>
+  <div class="grid2">
+    <section class="card">
+      <h2>Overnight skin temperature (°C)</h2>
+      <div class="chart small"><canvas id="temp"></canvas></div>
+    </section>
+    <section class="card">
+      <h2>Average activity level (MET)</h2>
+      <div class="chart small"><canvas id="met"></canvas></div>
+    </section>
+  </div>
 
   <section class="card">
     <h2>Heart rate on <input type="date" id="hr-day"></h2>
+    <div class="legend" id="legend-hr"></div>
     <div class="chart"><canvas id="hr"></canvas></div>
   </section>
 
   <section class="card">
+    <h2>What the ring has sent</h2>
+    <p class="muted">Every event type received over Bluetooth. "Decoded" counts events whose byte layout is understood. The rest are stored raw for you to reverse-engineer.</p>
+    <div class="table-wrap"><table id="types"></table></div>
+  </section>
+
+  <section class="card">
     <details>
-      <summary>Table view</summary>
+      <summary>Daily table</summary>
       <div class="table-wrap"><table id="table"></table></div>
     </details>
   </section>
